@@ -25,7 +25,16 @@ self.onmessage=({data:m})=>{
   const tone=(s.highlight||0)*Math.max(0,y-.5)*2-(s.shadow||0)*Math.max(0,.5-y)*2;
   const seed=Math.sin((i/4+1)*12.9898)*43758.5453;
   const grain=((seed-Math.floor(seed))-.5)*(s.grain||0);
-  for(let c=0;c<3;c++)a[i+c]=255*clamp((y+(v[c]-y)*s.saturation-.5)*s.contrast+.5+tone+grain);
+  v=v.map(x=>(y+(x-y)*s.saturation-.5)*s.contrast+.5+tone);
+  // Original approximation, not extracted Fujifilm firmware code. Smooth masks
+  // deepen saturated red/yellow/green and blue independently, preserving hue.
+  const smooth=(a,b,x)=>{const t=clamp((x-a)/(b-a));return t*t*(3-2*t)};
+  const mask=v.map(clamp),max=Math.max(...mask),min=Math.min(...mask),sat=max>0?(max-min)/max:0;
+  const blue=smooth(0,.22,mask[2]-Math.max(mask[0],mask[1]));
+  const chroma=smooth(.18,.75,sat),light=smooth(.03,.25,max);
+  const warm=smooth(0,.18,Math.max(mask[0],mask[1])-mask[2]);
+  const depth=chroma*light*(.18*(s.colorChrome||0)*warm+.24*(s.colorChromeBlue||0)*blue);
+  for(let c=0;c<3;c++)a[i+c]=255*clamp(v[c]*(1-depth)+grain);
  }
  self.postMessage({id:m.id,pixels:a.buffer},[a.buffer]);
  }catch(e){self.postMessage({id:m.id,error:e.message});}
@@ -77,6 +86,9 @@ function parseRecipe(text, sourceURL='', suppliedName='') {
  const kelvin=wb.match(/\b([2-9]\d{3})\s*K?\b/i);fields.kelvin=kelvin?Number(kelvin[1]):null;
  fields.grain=t.match(/(?:grain effect|grain|เกรน)\s*[:：]\s*([^\n]+)/i)?.[1]||'';
  fields.dynamicRange=t.match(/(?:dynamic range|DR)\s*[:：]\s*([^\n]+)/i)?.[1]||'';
+ const chromeLevel=names=>{const m=t.match(new RegExp('(?:^|\\n)\\s*(?:'+names+')\\s*[:：]\\s*(off|weak|strong|ปิด|อ่อน|แรง)\\b','i'));return m?(/strong|แรง/i.test(m[1])?'Strong':/weak|อ่อน/i.test(m[1])?'Weak':'Off'):'Off'};
+ fields.colorChrome=chromeLevel('colou?r chrome(?: effect)?');
+ fields.colorChromeBlue=chromeLevel('colou?r chrome (?:fx )?blue');
  if(!film)throw Error('ไม่พบชื่อ Film Simulation กรุณาเพิ่มบรรทัด Film Simulation: Classic Chrome เป็นต้น');
  if(Object.values(fields).filter(v=>typeof v==='number'&&Number.isFinite(v)).length<2)throw Error('อ่านค่าตัวเลขได้น้อยกว่า 2 ค่า กรุณาวางข้อความการตั้งค่าสูตรให้ครบ');
  for(const k of ['highlight','shadow','color','sharpness','noise','clarity'])if(fields[k]!==null&&(fields[k]<-10||fields[k]>10))throw Error('ค่า '+k+' อยู่นอกช่วงที่รองรับ');
@@ -114,6 +126,14 @@ if(typeof document!=='undefined'){
   input.readRecipeValue=read;input.setRecipeValue=n=>{input.value=Math.round(Number(n)*divisor/step)*step;refresh()};input.refreshRecipeControl=refresh;refresh();return input;
  }
  const inputs={};
+ const chromeControls={};
+ for(const [key,title] of [['colorChrome','Color Chrome Effect'],['colorChromeBlue','Color Chrome FX Blue']]){
+  const label=el('label',title,manual),select=el('select','',label);select.setAttribute('aria-label',title);
+  for(const level of ['Off','Weak','Strong'])el('option',level,select);chromeControls[key]=select;
+  select.onchange=()=>{recipeSettings[key]=select.value==='Strong'?1:select.value==='Weak'?.5:0;if(activeRecipe)activeRecipe={...activeRecipe,fields:{...activeRecipe.fields,[key]:select.value}};render()};
+ }
+ el('p','Color Chrome ทั้งสองตัวเป็นเอฟเฟกต์จำลอง: ปรับได้แยกกันและมีผลทันทีต่อภาพกับ JPEG ไม่ใช่อัลกอริทึมที่ดึงจากเฟิร์มแวร์',manual).className='note';
+ for(const button of document.querySelectorAll('[data-look],#reset'))button.addEventListener('click',()=>{for(const control of Object.values(chromeControls))control.value='Off'});
  for(const [key,title,min,max,step,initial,divisor] of [['exposure','Exposure EV',-9,9,1,0,3],['highlight','Highlight',-2,4,.5,0,1],['shadow','Shadow',-2,4,.5,0,1],['color','Color',-4,4,1,0,1],['wbRed','WB Red',-9,9,1,0,1],['wbBlue','WB Blue',-9,9,1,0,1]])inputs[key]=slider(title,min,max,step,initial,divisor);
  const wbLabel=el('label','WB mode',manual),wb=el('select','',wbLabel);wb.setAttribute('aria-label','WB mode');for(const title of ['Auto','Daylight','Shade','Kelvin'])el('option',title,wb);
  const kelvin=slider('Kelvin ของสูตร',2500,10000,50,6500);kelvin.disabled=true;kelvin.refreshRecipeControl();wb.onchange=()=>{kelvin.disabled=wb.value!=='Kelvin';kelvin.refreshRecipeControl()};
@@ -130,11 +150,13 @@ if(typeof document!=='undefined'){
  fetchButton.onclick=async()=>{candidate=null;apply.disabled=true;try{const link=allowed(url.value);report.textContent='กำลังอ่านสูตร…';const response=await fetch(link,{credentials:'omit',signal:AbortSignal.timeout(15000)});if(!response.ok)throw Error();const html=await response.text();const doc=new DOMParser().parseFromString(html,'text/html');doc.querySelectorAll('script,style,nav,footer,header').forEach(e=>e.remove());text.value=(doc.querySelector('article')||doc.querySelector('main')||doc.body).innerText||doc.body.textContent;review()}catch{report.textContent='เว็บไม่อนุญาตให้อ่านข้ามเว็บไซต์ หรืออ่านไม่สำเร็จ: เปิดลิงก์แล้วคัดลอกเฉพาะชื่อและค่าตั้งค่าสูตรมาวางด้านล่าง'}};
  function use(r){activeRecipe=r;const f=r.fields;manualName.value=r.name;filmSelect.value=r.film;for(const [key,input] of Object.entries(inputs))input.setRecipeValue(f[key]??0);wb.value=f.kelvin?'Kelvin':f.wbMode||'Auto';kelvin.disabled=wb.value!=='Kelvin';kelvin.setRecipeValue(f.kelvin||6500);grain.value=/strong|แรง/i.test(f.grain)?'Strong':/weak|อ่อน/i.test(f.grain)?'Weak':'Off';look=r.film;comparing=false;$('#exposure').value=f.exposure??0;$('#color').value=Math.max(0,Math.min(2,1+(f.color??0)*.07));$('#contrast').value=1;$('#warmth').value=f.kelvin?Math.max(-1,Math.min(1,(f.kelvin-6500)/4000)):0;
  recipeSettings={highlight:(f.highlight??0)*.035,shadow:(f.shadow??0)*.035,wbRed:(f.wbRed??0)*.012,wbBlue:(f.wbBlue??0)*.012,grain:/strong|แรง/i.test(f.grain)?.035:/weak|อ่อน/i.test(f.grain)?.015:0};
+ for(const [key,control] of Object.entries(chromeControls)){control.value=['Off','Weak','Strong'].includes(f[key])?f[key]:'Off';recipeSettings[key]=control.value==='Strong'?1:control.value==='Weak'?.5:0;}
  document.querySelectorAll('.film').forEach(b=>b.classList.toggle('selected',b.dataset.look===look));render();report.textContent='ใช้สูตร '+r.name+' แล้ว (จำลองในแอป)\n'+JSON.stringify(f,null,2);}
  apply.onclick=()=>{if(!candidate)return;use(candidate);try{const list=library().filter(r=>r.name!==candidate.name);list.push(candidate);localStorage.setItem('filmroom-recipes',JSON.stringify(list.slice(-50)));refreshList()}catch{report.textContent+='\nพื้นที่จัดเก็บเต็ม บันทึกสูตรไม่ได้'}};
  load.onclick=()=>{const r=library()[+saved.value];if(r)use(r)};refreshList();
  manual.onsubmit=e=>{e.preventDefault();if(!manual.reportValidity())return;try{
   const fields=Object.fromEntries(Object.entries(inputs).map(([key,input])=>[key,input.readRecipeValue()]));
+  for(const [key,control] of Object.entries(chromeControls))fields[key]=control.value;
   if(Object.values(fields).some(x=>!Number.isFinite(x)))throw Error('กรุณากรอกค่าตัวเลขให้ครบ');
   Object.assign(fields,{kelvin:wb.value==='Kelvin'?kelvin.readRecipeValue():null,wbMode:wb.value,grain:grain.value,sharpness:null,noise:null,clarity:null,dynamicRange:''});
   const r={name:manualName.value.trim(),film:filmSelect.value,sourceURL:'',fields};if(!r.name)throw Error('กรุณาตั้งชื่อสูตร');use(r);
@@ -156,7 +178,7 @@ function makeLightroomPreset(name, adjustments, recipe=null, uuid) {
   if(f.kelvin){attrs.WhiteBalance='Custom';attrs.Temperature=Math.round(bounded(f.kelvin,2000,50000));}
  }
  // Leave unsupported or unmappable properties absent, rather than silently invent values.
- const description='Film Room approximate basic adjustments. Film LUT/base simulation NOT included. WB shift and warmth slider, ISO, DR, NR, sharpness and clarity NOT converted. '+(recipe?`Recipe: ${recipe.name}; base: ${recipe.film}; source: ${recipe.sourceURL||'user input'}. Camera highlight/shadow steps mapped approximately to Lightroom sliders.`:'Current web app basic settings.');
+ const description='Film Room approximate basic adjustments. Film LUT/base simulation and Color Chrome / FX Blue NOT included. WB shift and warmth slider, ISO, DR, NR, sharpness and clarity NOT converted. '+(recipe?`Recipe: ${recipe.name}; base: ${recipe.film}; source: ${recipe.sourceURL||'user input'}. Camera highlight/shadow steps mapped approximately to Lightroom sliders.`:'Current web app basic settings.');
  const attributes=Object.entries(attrs).map(([key,value])=>`crs:${key}="${escape(value)}"`).join('\n    ');
  return `<?xml version="1.0" encoding="UTF-8"?>\n<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Film Room">\n <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n  <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"\n    ${attributes}>\n   <crs:Name><rdf:Alt><rdf:li xml:lang="x-default">${escape(name)}</rdf:li></rdf:Alt></crs:Name>\n   <crs:Group><rdf:Alt><rdf:li xml:lang="x-default">Film Room</rdf:li></rdf:Alt></crs:Group>\n   <crs:Description><rdf:Alt><rdf:li xml:lang="x-default">${escape(description)}</rdf:li></rdf:Alt></crs:Description>\n  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n`;
 }
@@ -166,7 +188,7 @@ if(typeof document!=='undefined'){
  const heading=document.createElement('h3');heading.textContent='Lightroom Mobile preset';box.append(heading);
  const name=document.createElement('input');name.placeholder='ชื่อพรีเซ็ตของคุณ';name.setAttribute('aria-label','ชื่อพรีเซ็ต Lightroom');box.append(name);
  const button=document.createElement('button');button.textContent='ดาวน์โหลดค่าปัจจุบันเป็น .XMP';box.append(button);
- const note=document.createElement('p');note.className='note';note.textContent='ส่งออกค่าพื้นฐานเท่านั้น ไม่รวม LUT/สี Film Simulation และ WB shift ผลใน Lightroom จึงต่างจากเว็บได้';box.append(note);
+ const note=document.createElement('p');note.className='note';note.textContent='ส่งออกค่าพื้นฐานเท่านั้น ไม่รวม LUT/สี Film Simulation, Color Chrome ทั้งสองตัว และ WB shift ผลใน Lightroom จึงต่างจากเว็บได้';box.append(note);
  const feedback=document.createElement('p');feedback.setAttribute('role','status');box.append(feedback);
  const help=document.createElement('p');help.className='note';help.textContent='บันทึกลง Files แล้วเปิด Lightroom > Presets > เมนู ⋯ > Import Presets > เลือกไฟล์ .xmp';box.append(help);
  document.querySelector('#recipes').append(box);

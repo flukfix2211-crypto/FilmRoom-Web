@@ -10,6 +10,8 @@ self.onmessage=({data:m})=>{
  try {
  const {pixels,cube,settings:s}=m; const a=new Uint8ClampedArray(pixels), lut=cube?new Float32Array(cube):null;
  const clamp=x=>Math.max(0,Math.min(1,x)), gain=2**s.exposure;
+ const smooth=(a,b,x)=>{const t=clamp((x-a)/(b-a));return t*t*(3-2*t)};
+ const chrome=clamp(s.colorChrome||0),fxBlue=clamp(s.colorChromeBlue||0);
  for(let i=0;i<a.length;i+=4){
   let v=[a[i]/255,a[i+1]/255,a[i+2]/255].map((x,c)=>clamp(x*gain*(c===0?1+s.warmth*.12:c===2?1-s.warmth*.12:1)));
   if(lut){
@@ -26,15 +28,22 @@ self.onmessage=({data:m})=>{
   const seed=Math.sin((i/4+1)*12.9898)*43758.5453;
   const grain=((seed-Math.floor(seed))-.5)*(s.grain||0);
   v=v.map(x=>(y+(x-y)*s.saturation-.5)*s.contrast+.5+tone);
-  // Original approximation, not extracted Fujifilm firmware code. Smooth masks
-  // deepen saturated red/yellow/green and blue independently, preserving hue.
-  const smooth=(a,b,x)=>{const t=clamp((x-a)/(b-a));return t*t*(3-2*t)};
-  const mask=v.map(clamp),max=Math.max(...mask),min=Math.min(...mask),sat=max>0?(max-min)/max:0;
-  const blue=smooth(0,.22,mask[2]-Math.max(mask[0],mask[1]));
-  const chroma=smooth(.18,.75,sat),light=smooth(.03,.25,max);
-  const warm=smooth(0,.18,Math.max(mask[0],mask[1])-mask[2]);
-  const depth=chroma*light*(.18*(s.colorChrome||0)*warm+.24*(s.colorChromeBlue||0)*blue);
-  for(let c=0;c<3;c++)a[i+c]=255*clamp(v[c]*(1-depth)+grain);
+  // Original behavioral approximation; coefficients are not camera calibration.
+  // Apply a chroma-dependent tone curve rather than a uniform brightness cut.
+  // The general effect includes saturated blues, with FX Blue adding blue depth.
+  let scale=1;
+  if(chrome||fxBlue){
+   const r=clamp(v[0]),g=clamp(v[1]),b=clamp(v[2]);
+   const max=Math.max(r,g,b),min=Math.min(r,g,b),sat=max>0?(max-min)/max:0;
+   const chroma=smooth(.16,.72,sat),light=smooth(.04,.28,max);
+   // Include cyan-blue skies; suppress violet, green, skin and neutral regions.
+   const blue=smooth(.015,.20,b-r)*smooth(-.12,.12,b-g);
+   const amount=chroma*light*(chrome*(1-.55*blue)+fxBlue*blue);
+   // A monotonic power curve retains existing tonal differences. The fade in
+   // deep shadows limits crushing; scaling all channels preserves RGB ratios.
+   scale=Math.pow(2,-.16*amount)*Math.pow(Math.max(max,.04),.28*amount);
+  }
+  for(let c=0;c<3;c++)a[i+c]=255*clamp(v[c]*scale+grain);
  }
  self.postMessage({id:m.id,pixels:a.buffer},[a.buffer]);
  }catch(e){self.postMessage({id:m.id,error:e.message});}
@@ -133,6 +142,7 @@ if(typeof document!=='undefined'){
   select.onchange=()=>{recipeSettings[key]=select.value==='Strong'?1:select.value==='Weak'?.5:0;if(activeRecipe)activeRecipe={...activeRecipe,fields:{...activeRecipe.fields,[key]:select.value}};render()};
  }
  el('p','Color Chrome ทั้งสองตัวเป็นเอฟเฟกต์จำลอง: ปรับได้แยกกันและมีผลทันทีต่อภาพกับ JPEG ไม่ใช่อัลกอริทึมที่ดึงจากเฟิร์มแวร์',manual).className='note';
+ el('p','Effect: เพิ่มความลึกและการไล่โทนบริเวณสีอิ่มตัว • FX Blue: เพิ่มความลึกเฉพาะฟ้า/น้ำเงิน เช่น ท้องฟ้าและทะเล • ไม่กู้รายละเอียดที่เสียไปแล้วใน JPEG',manual).className='note';
  for(const button of document.querySelectorAll('[data-look],#reset'))button.addEventListener('click',()=>{for(const control of Object.values(chromeControls))control.value='Off'});
  for(const [key,title,min,max,step,initial,divisor] of [['exposure','Exposure EV',-9,9,1,0,3],['highlight','Highlight',-2,4,.5,0,1],['shadow','Shadow',-2,4,.5,0,1],['color','Color',-4,4,1,0,1],['wbRed','WB Red',-9,9,1,0,1],['wbBlue','WB Blue',-9,9,1,0,1]])inputs[key]=slider(title,min,max,step,initial,divisor);
  const wbLabel=el('label','WB mode',manual),wb=el('select','',wbLabel);wb.setAttribute('aria-label','WB mode');for(const title of ['Auto','Daylight','Shade','Kelvin'])el('option',title,wb);

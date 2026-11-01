@@ -34,6 +34,7 @@ self.onmessage=({data:m})=>{
 const photo=$('#photo'), file=$('#file'), exportButton=$('#export');
 let source=null,look='Original',originalURL=null,revision=0,comparing=false,busy=false;
 let recipeSettings={};
+let activeRecipe=null;
 const cache=new Map(),worker=new Worker(URL.createObjectURL(new Blob([document.querySelector('#worker-code').textContent],{type:'text/javascript'}))),jobs=new Map();let jobID=0;
 worker.onmessage=({data:m})=>{const job=jobs.get(m.id);if(!job)return;jobs.delete(m.id);m.error?job.reject(Error(m.error)):job.resolve(m.pixels)};
 worker.onerror=()=>{for(const job of jobs.values())job.reject(Error('เครื่องประมวลผลภาพหยุดทำงาน กรุณาโหลดหน้าใหม่'));jobs.clear()};
@@ -49,11 +50,11 @@ async function render(){if(!source)return;const version=++revision;message('ก�
 async function openImage(b,name){const next=await createImageBitmap(b,{imageOrientation:'from-image'});source?.close();source=next;if(originalURL)URL.revokeObjectURL(originalURL);originalURL=URL.createObjectURL(b);$('#filename').textContent=name;comparing=false;await render()}
 $('#import').onclick=()=>file.click();file.accept='.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp';
 file.onchange=async()=>{const f=file.files[0];if(!f||busy)return;busy=true;exportButton.setAttribute('aria-disabled','true');try{let b=f;if(/\.(raf|dng)$/i.test(f.name)){throw Error('เวอร์ชันเว็บออนไลน์รองรับ JPEG/PNG/WebP กรุณาแปลง RAW ก่อนนำเข้า')}await openImage(b,f.name)}catch(e){message(e.message)}finally{busy=false;file.value='';exportButton.removeAttribute('aria-disabled')}};
-document.querySelectorAll('[data-look]').forEach(b=>b.onclick=()=>{if(busy)return;look=b.dataset.look;comparing=false;document.querySelectorAll('.film').forEach(x=>x.classList.toggle('selected',x===b));render()});
+document.querySelectorAll('[data-look]').forEach(b=>b.onclick=()=>{if(busy)return;look=b.dataset.look;activeRecipe=null;recipeSettings={};comparing=false;document.querySelectorAll('.film').forEach(x=>x.classList.toggle('selected',x===b));render()});
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{document.querySelectorAll('section').forEach(s=>s.hidden=s.id!==b.dataset.tab);document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('on',x===b))});
 $('#compare').onclick=()=>{if(!source)return;comparing=!comparing;photo.src=comparing?originalURL:shownURL;$('#compare').textContent=comparing?'กลับภาพแต่ง':'ดูต้นฉบับ'};
 let debounce;for(const id of ['exposure','color','contrast','warmth'])$('#'+id).oninput=()=>{clearTimeout(debounce);debounce=setTimeout(render,180)};
-$('#reset').onclick=()=>{recipeSettings={};$('#exposure').value=0;$('#color').value=1;$('#contrast').value=1;$('#warmth').value=0;render()};
+$('#reset').onclick=()=>{recipeSettings={};activeRecipe=null;$('#exposure').value=0;$('#color').value=1;$('#contrast').value=1;$('#warmth').value=0;render()};
 exportButton.removeAttribute('href');exportButton.removeAttribute('download');exportButton.setAttribute('role','button');exportButton.tabIndex=0;
 exportButton.onclick=async(e)=>{e.preventDefault();if(!source||busy)return;busy=true;message('กำลังสร้าง JPEG รวมสีและค่าปรับทั้งหมด…');try{const c=await processed(2560),b=await blob(c),url=URL.createObjectURL(b),a=document.createElement('a');a.href=url;a.download=`FilmRoom-${look}-${Date.now()}.jpg`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);message(`ส่งออกแล้ว ${c.width} × ${c.height} px`)}catch(e){message(e.message)}finally{busy=false}};
 exportButton.onkeydown=e=>{if(e.key==='Enter')exportButton.click()};
@@ -105,11 +106,46 @@ if(typeof document!=='undefined'){
  function review(){candidate=null;apply.disabled=true;try{const link=url.value.trim()?allowed(url.value):'';candidate=parseRecipe(text.value,link,name.value);report.textContent=JSON.stringify(candidate,null,2)+'\n\nตรวจค่าด้านบนก่อนใช้; ค่าที่อ่านไม่พบจะเป็น null';apply.disabled=false}catch(e){report.textContent=e.message}}
  read.onclick=review;for(const input of [text,url,name])input.oninput=()=>{candidate=null;apply.disabled=true};
  fetchButton.onclick=async()=>{candidate=null;apply.disabled=true;try{const link=allowed(url.value);report.textContent='กำลังอ่านสูตร…';const response=await fetch(link,{credentials:'omit',signal:AbortSignal.timeout(15000)});if(!response.ok)throw Error();const html=await response.text();const doc=new DOMParser().parseFromString(html,'text/html');doc.querySelectorAll('script,style,nav,footer,header').forEach(e=>e.remove());text.value=(doc.querySelector('article')||doc.querySelector('main')||doc.body).innerText||doc.body.textContent;review()}catch{report.textContent='เว็บไม่อนุญาตให้อ่านข้ามเว็บไซต์ หรืออ่านไม่สำเร็จ: เปิดลิงก์แล้วคัดลอกเฉพาะชื่อและค่าตั้งค่าสูตรมาวางด้านล่าง'}};
- function use(r){const f=r.fields;look=r.film;comparing=false;$('#exposure').value=f.exposure??0;$('#color').value=Math.max(0,Math.min(2,1+(f.color??0)*.07));$('#contrast').value=1;$('#warmth').value=f.kelvin?Math.max(-1,Math.min(1,(f.kelvin-6500)/4000)):0;
+ function use(r){activeRecipe=r;const f=r.fields;look=r.film;comparing=false;$('#exposure').value=f.exposure??0;$('#color').value=Math.max(0,Math.min(2,1+(f.color??0)*.07));$('#contrast').value=1;$('#warmth').value=f.kelvin?Math.max(-1,Math.min(1,(f.kelvin-6500)/4000)):0;
  recipeSettings={highlight:(f.highlight??0)*.035,shadow:(f.shadow??0)*.035,wbRed:(f.wbRed??0)*.012,wbBlue:(f.wbBlue??0)*.012,grain:/strong|แรง/i.test(f.grain)?.035:/weak|อ่อน/i.test(f.grain)?.015:0};
  document.querySelectorAll('.film').forEach(b=>b.classList.toggle('selected',b.dataset.look===look));render();report.textContent='ใช้สูตร '+r.name+' แล้ว (จำลองในแอป)\n'+JSON.stringify(f,null,2);}
  apply.onclick=()=>{if(!candidate)return;use(candidate);try{const list=library().filter(r=>r.name!==candidate.name);list.push(candidate);localStorage.setItem('filmroom-recipes',JSON.stringify(list.slice(-50)));refreshList()}catch{report.textContent+='\nพื้นที่จัดเก็บเต็ม บันทึกสูตรไม่ได้'}};
  load.onclick=()=>{const r=library()[+saved.value];if(r)use(r)};refreshList();
  const style=document.createElement('style');style.textContent='#recipes input,#recipes textarea,#recipes select{display:block;width:100%;box-sizing:border-box;margin:12px 0;padding:12px;border:1px solid #485248;border-radius:10px;background:#1b221b;color:#fff;font:inherit}#recipes button{margin:6px 6px 6px 0}#recipes button:disabled{opacity:.4}';document.head.append(style);
+}
+
+// Basic develop preset only; does not embed LUTs or camera film profiles.
+function makeLightroomPreset(name, adjustments, recipe=null, uuid) {
+ const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+ const bounded=(x,min,max)=>Math.max(min,Math.min(max,Number.isFinite(Number(x))?Number(x):0));
+ const f=recipe?.fields||{},attrs={PresetType:'Normal',Cluster:'',UUID:uuid||crypto.randomUUID().replace(/-/g,'').toUpperCase(),SupportsAmount:'True',SupportsColor:'True',SupportsMonochrome:'True',SupportsHighDynamicRange:'True',SupportsNormalDynamicRange:'True',SupportsSceneReferred:'True',SupportsOutputReferred:'True',CameraModelRestriction:'',Version:'15.0',ProcessVersion:'11.0',HasSettings:'True',
+ Exposure2012:bounded(adjustments.exposure,-5,5).toFixed(3),Contrast2012:Math.round(bounded((adjustments.contrast-1)*100,-100,100)),Saturation:Math.round(bounded((adjustments.saturation-1)*100,-100,100))};
+ if(recipe){
+  if(f.highlight!==null&&f.highlight!==undefined)attrs.Highlights2012=Math.round(bounded(f.highlight*20,-100,100));
+  if(f.shadow!==null&&f.shadow!==undefined)attrs.Shadows2012=Math.round(bounded(-f.shadow*20,-100,100));
+  if(f.grain){attrs.GrainAmount=/strong|แรง/i.test(f.grain)?40:/weak|อ่อน/i.test(f.grain)?20:0;attrs.GrainSize=25;attrs.GrainFrequency=50;}
+  if(f.kelvin){attrs.WhiteBalance='Custom';attrs.Temperature=Math.round(bounded(f.kelvin,2000,50000));}
+ }
+ // Leave unsupported or unmappable properties absent, rather than silently invent values.
+ const description='Film Room approximate basic adjustments. Film LUT/base simulation NOT included. WB shift and warmth slider, ISO, DR, NR, sharpness and clarity NOT converted. '+(recipe?`Recipe: ${recipe.name}; base: ${recipe.film}; source: ${recipe.sourceURL||'user input'}. Camera highlight/shadow steps mapped approximately to Lightroom sliders.`:'Current web app basic settings.');
+ const attributes=Object.entries(attrs).map(([key,value])=>`crs:${key}="${escape(value)}"`).join('\n    ');
+ return `<?xml version="1.0" encoding="UTF-8"?>\n<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Film Room">\n <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n  <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"\n    ${attributes}>\n   <crs:Name><rdf:Alt><rdf:li xml:lang="x-default">${escape(name)}</rdf:li></rdf:Alt></crs:Name>\n   <crs:Group><rdf:Alt><rdf:li xml:lang="x-default">Film Room</rdf:li></rdf:Alt></crs:Group>\n   <crs:Description><rdf:Alt><rdf:li xml:lang="x-default">${escape(description)}</rdf:li></rdf:Alt></crs:Description>\n  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n`;
+}
+if(typeof module!=='undefined')module.exports={makeLightroomPreset};
+if(typeof document!=='undefined'){
+ const box=document.createElement('div');box.className='recipe';
+ const heading=document.createElement('h3');heading.textContent='Lightroom Mobile preset';box.append(heading);
+ const name=document.createElement('input');name.placeholder='ชื่อพรีเซ็ตของคุณ';name.setAttribute('aria-label','ชื่อพรีเซ็ต Lightroom');box.append(name);
+ const button=document.createElement('button');button.textContent='ดาวน์โหลดค่าปัจจุบันเป็น .XMP';box.append(button);
+ const note=document.createElement('p');note.className='note';note.textContent='ส่งออกค่าพื้นฐานเท่านั้น ไม่รวม LUT/สี Film Simulation และ WB shift ผลใน Lightroom จึงต่างจากเว็บได้';box.append(note);
+ const feedback=document.createElement('p');feedback.setAttribute('role','status');box.append(feedback);
+ const help=document.createElement('p');help.className='note';help.textContent='บันทึกลง Files แล้วเปิด Lightroom > Presets > เมนู ⋯ > Import Presets > เลือกไฟล์ .xmp';box.append(help);
+ document.querySelector('#recipes').append(box);
+ button.onclick=()=>{try{
+  const presetName=name.value.trim()||activeRecipe?.name||'Film Room '+look;
+  const xml=makeLightroomPreset(presetName,values(),activeRecipe),blob=new Blob([xml],{type:'application/rdf+xml;charset=utf-8'}),url=URL.createObjectURL(blob),link=document.createElement('a');
+  link.href=url;link.download=presetName.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,100)+'.xmp';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+  feedback.textContent='สร้างไฟล์ XMP แล้ว — ยังไม่ได้ทดสอบการนำเข้าบน Lightroom Mobile จริง';
+ }catch(e){feedback.textContent='สร้างพรีเซ็ตไม่สำเร็จ: '+e.message}};
 }
 </script></html>

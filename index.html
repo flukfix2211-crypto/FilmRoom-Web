@@ -99,6 +99,22 @@ if(typeof document!=='undefined'){
  const apply=el('button','ใช้สูตรกับภาพและบันทึก');apply.disabled=true;
  el('p','สีเป็นการจำลองของแอป ไม่ตรง JPEG จากกล้องแบบ 1:1; ISO, DR, NR, Sharpness และ Clarity เก็บเป็นข้อมูลอ้างอิง ยังไม่ประมวลผล').className='note';
  const saved=el('select');saved.setAttribute('aria-label','สูตรที่บันทึก');const load=el('button','ใช้สูตรที่บันทึก');
+ const manual=document.createElement('form');manual.className='recipe';section.prepend(manual);
+ el('h2','สร้างสูตรด้วยตัวเลข',manual);
+ const manualName=el('input','',manual);manualName.placeholder='ชื่อสูตรของฉัน';manualName.setAttribute('aria-label','ชื่อสูตรตัวเลข');manualName.required=true;manualName.maxLength=90;
+ const filmLabel=el('label','Film Simulation',manual),filmSelect=el('select','',filmLabel);filmSelect.setAttribute('aria-label','ฟิล์มของสูตรตัวเลข');
+ const filmOptions=[['PROVIA','PROVIA'],['VELVIA','Velvia'],['ASTIA','ASTIA'],['CLASSIC_CHROME','Classic Chrome'],['REALA','REALA ACE'],['PRONEG_HI','PRO Neg. Hi'],['PRONEG_STD','PRO Neg. Std'],['CLASSIC_NEG','Classic Neg.'],['NOSTALGIC','Nostalgic Neg.'],['ETERNA','ETERNA'],['BLEACH','Bleach Bypass'],['ACROS','ACROS'],['ACROS_YE','ACROS + Ye'],['ACROS_R','ACROS + R'],['ACROS_G','ACROS + G'],['MONO','Monochrome'],['MONO_YE','Monochrome + Ye'],['MONO_R','Monochrome + R'],['MONO_G','Monochrome + G'],['SEPIA','Sepia']];
+ for(const [value,title] of filmOptions){const o=el('option',title,filmSelect);o.value=value}filmSelect.value='CLASSIC_CHROME';
+ const inputs={};
+ for(const [key,title,min,max,step,initial] of [['exposure','Exposure EV (เช่น 0.33)',-3,3,.01,0],['highlight','Highlight',-2,4,.5,0],['shadow','Shadow',-2,4,.5,0],['color','Color',-4,4,1,0],['wbRed','WB Red',-9,9,1,0],['wbBlue','WB Blue',-9,9,1,0]]){
+  const label=el('label',title,manual),input=el('input','',label);input.type='number';input.min=min;input.max=max;input.step=step;input.value=initial;input.required=true;input.setAttribute('aria-label',title);inputs[key]=input;
+ }
+ const wbLabel=el('label','WB mode',manual),wb=el('select','',wbLabel);wb.setAttribute('aria-label','WB mode');for(const title of ['Auto','Daylight','Shade','Kelvin'])el('option',title,wb);
+ const kLabel=el('label','Kelvin (เมื่อเลือก Kelvin)',manual),kelvin=el('input','',kLabel);kelvin.type='number';kelvin.min=2500;kelvin.max=10000;kelvin.step=50;kelvin.value=6500;kelvin.disabled=true;kelvin.setAttribute('aria-label','Kelvin ของสูตร');wb.onchange=()=>{kelvin.disabled=wb.value!=='Kelvin';kelvin.required=!kelvin.disabled};
+ const grainLabel=el('label','Grain',manual),grain=el('select','',grainLabel);grain.setAttribute('aria-label','Grain ของสูตร');for(const title of ['Off','Weak','Strong'])el('option',title,grain);
+ el('p','ตัวเลขเป็นค่ารูปแบบสูตรกล้อง แอปจำลองผลสีโดยประมาณ; WB Auto/Daylight/Shade เก็บเป็นข้อมูล ไม่มีระบบ AWB แบบกล้อง ส่วน Kelvin และ WB shift มีผลต่อภาพจำลอง',manual).className='note';
+ const manualApply=el('button','ใช้สูตรตัวเลขและบันทึก',manual);manualApply.type='submit';
+ const manualStatus=el('p','',manual);manualStatus.setAttribute('role','status');
  let candidate=null;
  function library(){try{return JSON.parse(localStorage.getItem('filmroom-recipes')||'[]')}catch{return[]}}
  function refreshList(){saved.replaceChildren();for(const [i,r] of library().entries()){const o=document.createElement('option');o.value=i;o.textContent=r.name;saved.append(o)}load.disabled=!saved.options.length}
@@ -106,11 +122,18 @@ if(typeof document!=='undefined'){
  function review(){candidate=null;apply.disabled=true;try{const link=url.value.trim()?allowed(url.value):'';candidate=parseRecipe(text.value,link,name.value);report.textContent=JSON.stringify(candidate,null,2)+'\n\nตรวจค่าด้านบนก่อนใช้; ค่าที่อ่านไม่พบจะเป็น null';apply.disabled=false}catch(e){report.textContent=e.message}}
  read.onclick=review;for(const input of [text,url,name])input.oninput=()=>{candidate=null;apply.disabled=true};
  fetchButton.onclick=async()=>{candidate=null;apply.disabled=true;try{const link=allowed(url.value);report.textContent='กำลังอ่านสูตร…';const response=await fetch(link,{credentials:'omit',signal:AbortSignal.timeout(15000)});if(!response.ok)throw Error();const html=await response.text();const doc=new DOMParser().parseFromString(html,'text/html');doc.querySelectorAll('script,style,nav,footer,header').forEach(e=>e.remove());text.value=(doc.querySelector('article')||doc.querySelector('main')||doc.body).innerText||doc.body.textContent;review()}catch{report.textContent='เว็บไม่อนุญาตให้อ่านข้ามเว็บไซต์ หรืออ่านไม่สำเร็จ: เปิดลิงก์แล้วคัดลอกเฉพาะชื่อและค่าตั้งค่าสูตรมาวางด้านล่าง'}};
- function use(r){activeRecipe=r;const f=r.fields;look=r.film;comparing=false;$('#exposure').value=f.exposure??0;$('#color').value=Math.max(0,Math.min(2,1+(f.color??0)*.07));$('#contrast').value=1;$('#warmth').value=f.kelvin?Math.max(-1,Math.min(1,(f.kelvin-6500)/4000)):0;
+ function use(r){activeRecipe=r;const f=r.fields;manualName.value=r.name;filmSelect.value=r.film;for(const [key,input] of Object.entries(inputs))input.value=f[key]??0;wb.value=f.kelvin?'Kelvin':f.wbMode||'Auto';kelvin.disabled=wb.value!=='Kelvin';kelvin.required=!kelvin.disabled;kelvin.value=f.kelvin||6500;grain.value=/strong|แรง/i.test(f.grain)?'Strong':/weak|อ่อน/i.test(f.grain)?'Weak':'Off';look=r.film;comparing=false;$('#exposure').value=f.exposure??0;$('#color').value=Math.max(0,Math.min(2,1+(f.color??0)*.07));$('#contrast').value=1;$('#warmth').value=f.kelvin?Math.max(-1,Math.min(1,(f.kelvin-6500)/4000)):0;
  recipeSettings={highlight:(f.highlight??0)*.035,shadow:(f.shadow??0)*.035,wbRed:(f.wbRed??0)*.012,wbBlue:(f.wbBlue??0)*.012,grain:/strong|แรง/i.test(f.grain)?.035:/weak|อ่อน/i.test(f.grain)?.015:0};
  document.querySelectorAll('.film').forEach(b=>b.classList.toggle('selected',b.dataset.look===look));render();report.textContent='ใช้สูตร '+r.name+' แล้ว (จำลองในแอป)\n'+JSON.stringify(f,null,2);}
  apply.onclick=()=>{if(!candidate)return;use(candidate);try{const list=library().filter(r=>r.name!==candidate.name);list.push(candidate);localStorage.setItem('filmroom-recipes',JSON.stringify(list.slice(-50)));refreshList()}catch{report.textContent+='\nพื้นที่จัดเก็บเต็ม บันทึกสูตรไม่ได้'}};
  load.onclick=()=>{const r=library()[+saved.value];if(r)use(r)};refreshList();
+ manual.onsubmit=e=>{e.preventDefault();if(!manual.reportValidity())return;try{
+  const fields=Object.fromEntries(Object.entries(inputs).map(([key,input])=>[key,Number(input.value)]));
+  if(Object.values(fields).some(x=>!Number.isFinite(x)))throw Error('กรุณากรอกค่าตัวเลขให้ครบ');
+  Object.assign(fields,{kelvin:wb.value==='Kelvin'?Number(kelvin.value):null,wbMode:wb.value,grain:grain.value,sharpness:null,noise:null,clarity:null,dynamicRange:''});
+  const r={name:manualName.value.trim(),film:filmSelect.value,sourceURL:'',fields};if(!r.name)throw Error('กรุณาตั้งชื่อสูตร');use(r);
+  try{const list=library().filter(x=>x.name!==r.name);list.push(r);localStorage.setItem('filmroom-recipes',JSON.stringify(list.slice(-50)));refreshList();manualStatus.textContent='ใช้และบันทึกสูตร '+r.name+' แล้ว — ส่งออก XMP ได้ด้านล่าง'}catch{manualStatus.textContent='ใช้สูตรแล้ว แต่บันทึกไม่ได้เพราะพื้นที่จัดเก็บเต็ม'}
+ }catch(err){manualStatus.textContent=err.message}};
  const style=document.createElement('style');style.textContent='#recipes input,#recipes textarea,#recipes select{display:block;width:100%;box-sizing:border-box;margin:12px 0;padding:12px;border:1px solid #485248;border-radius:10px;background:#1b221b;color:#fff;font:inherit}#recipes button{margin:6px 6px 6px 0}#recipes button:disabled{opacity:.4}';document.head.append(style);
 }
 

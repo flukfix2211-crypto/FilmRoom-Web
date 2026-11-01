@@ -166,8 +166,8 @@ if(typeof document!=='undefined'){
  load.onclick=()=>{const r=library()[+saved.value];if(r)use(r)};refreshList();
  manual.onsubmit=e=>{e.preventDefault();if(!manual.reportValidity())return;try{
   const fields=Object.fromEntries(Object.entries(inputs).map(([key,input])=>[key,input.readRecipeValue()]));
-  for(const [key,control] of Object.entries(chromeControls))fields[key]=control.value;
   if(Object.values(fields).some(x=>!Number.isFinite(x)))throw Error('กรุณากรอกค่าตัวเลขให้ครบ');
+  for(const [key,control] of Object.entries(chromeControls))fields[key]=control.value;
   Object.assign(fields,{kelvin:wb.value==='Kelvin'?kelvin.readRecipeValue():null,wbMode:wb.value,grain:grain.value,sharpness:null,noise:null,clarity:null,dynamicRange:''});
   const r={name:manualName.value.trim(),film:filmSelect.value,sourceURL:'',fields};if(!r.name)throw Error('กรุณาตั้งชื่อสูตร');use(r);
   try{const list=library().filter(x=>x.name!==r.name);list.push(r);localStorage.setItem('filmroom-recipes',JSON.stringify(list.slice(-50)));refreshList();manualStatus.textContent='ใช้และบันทึกสูตร '+r.name+' แล้ว — ส่งออก XMP ได้ด้านล่าง'}catch{manualStatus.textContent='ใช้สูตรแล้ว แต่บันทึกไม่ได้เพราะพื้นที่จัดเก็บเต็ม'}
